@@ -26,10 +26,20 @@ class StripesMapper : public HadoopPipes::Mapper {
 				std::string s = numbers[i];
 				outer.clear();
 				for(int j=0; j<numbers.size(); j++) {
+					if(i==j) {
+						continue;
+					}
 					std::string t = numbers[j];
-					double count = 1.0;
-					
+					int count = 1.0;
+					if(outer.find(t)!=outer.end()) {
+						count = outer[t]+1;
+					}
+					outer[t]=count;
+					inner.clear();
+					inner[s] = 1;
+					context.emit(t,mapToStr(inner));
 				}
+				context.emit(s,mapToStr(outer));
             }
             
         }
@@ -48,43 +58,48 @@ class StripesMapper : public HadoopPipes::Mapper {
 
 class StripesReducer : public HadoopPipes::Reducer {
     public:
-        double count;
         StripesReducer( HadoopPipes::TaskContext& context ) {
-            this->count = 0.0;
         }
         
         void reduce(HadoopPipes::ReduceContext& context) {
-            std::string key = context.getInputKey();
-            
-            std::map<std::string,int> sumMap;
-            while(context.nextValue()) {
-                count++;
-                std::string value = context.getInputValue(); //textual representation of the map
-                std::vector<std::string> pairs = HadoopUtils::splitString(value, ";");
-                std::vector<std::string>::iterator it;
-                for(it = pairs.begin(); it != pairs.end(); it++) {
-                        std::string x = *it;
-                        std::vector<std::string> pair = HadoopUtils::splitString(x,",");
-                        std::string k = pair[0].erase(0,1); // delete trailing '('
-                        std::string v = pair[1].erase(pair[1].size()-1); //delete ')'
-                        int vInt = HadoopUtils::toInt(v);
-                        if(sumMap.find(k)==sumMap.end()) {
-                            sumMap[k]=vInt;
-                        } else {
-                            sumMap[k]=sumMap[k]+vInt;
-                        }
-                        
-                }
-            }
-            
-            
-            std::stringstream ss;
-           
-            std::map<std::string,int>::iterator iter;
-            for(iter = sumMap.begin(); iter!=sumMap.end(); iter++) {
-                ss << iter->first << " " << (iter->second/count) << "\n";
-            }
-            context.emit(key,ss.str());
+            	std::string key = context.getInputKey();
+		double marginals = 0.0;
+		std::map<std::string, double> out;
+		while(context.nextValue()) {
+			std::string strMap = context.getInputValue();
+			std::vector<std::string> pairs = HadoopUtils::splitString(strMap,";");
+			std::map<std::string, int> in;
+			for(int i=0; i<pairs.size(); i++) {
+				std::vector<std::string> pair = HadoopUtils::splitString(pairs[i],",");
+				std::string k = pair[0].erase(0,1);
+				std::string v = pair[1].erase(pair[1].size()-1,1);
+				int vInt = HadoopUtils::toInt(v);
+				in[k] = vInt;
+			}
+			std::map<std::string, int>::iterator it;
+			for(it=in.begin(); it!=in.end(); ++it) {
+				double tmp = (1.0*it->second);
+				marginals+=tmp;
+				std::string k = it->first;
+				if(out.find(k)!=out.end()) {
+					tmp += out[k];
+				}
+				out[k] = tmp;
+			}
+		}
+		std::map<std::string, double> probs;
+		std::map<std::string, double>::iterator it;
+		for(it=out.begin(); it!=out.end(); ++it) {
+			double c = it->second;
+			double prob = c/marginals;
+			probs[it->first] = prob;
+		}
+		std::stringstream ss;
+		std::map<std::string, double>::iterator iter;
+		for(iter=probs.begin(); iter!=probs.end(); ++iter) {
+			ss << iter->first << ": " << iter->second << "\n";
+		}
+		context.emit(key,ss.str());
         }
         
         
